@@ -1,0 +1,346 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MiniCraft - Standalone HTML</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --sky: #78b9f7;
+        --ui: #1b1f2a;
+        --ui-accent: #2c3347;
+        --text: #f4f7ff;
+      }
+
+      * {
+        box-sizing: border-box;
+        font-family: "Segoe UI", system-ui, sans-serif;
+      }
+
+      body {
+        margin: 0;
+        background: #0b0f17;
+        color: var(--text);
+        display: flex;
+        min-height: 100vh;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .shell {
+        width: min(1100px, 96vw);
+        background: var(--ui);
+        border-radius: 18px;
+        padding: 18px;
+        box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+        display: grid;
+        gap: 16px;
+        grid-template-columns: 1fr 280px;
+      }
+
+      canvas {
+        width: 100%;
+        height: auto;
+        border-radius: 14px;
+        background: var(--sky);
+        border: 2px solid #0f1421;
+      }
+
+      .hud {
+        background: var(--ui-accent);
+        border-radius: 14px;
+        padding: 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+
+      .title {
+        font-size: 20px;
+        font-weight: 700;
+      }
+
+      .stat {
+        font-size: 13px;
+        opacity: 0.8;
+        line-height: 1.5;
+      }
+
+      .toolbar {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 8px;
+      }
+
+      .slot {
+        background: #111623;
+        border-radius: 10px;
+        padding: 10px 8px;
+        text-align: center;
+        font-size: 12px;
+        border: 2px solid transparent;
+      }
+
+      .slot.active {
+        border-color: #9fd5ff;
+        box-shadow: inset 0 0 0 1px rgba(159, 213, 255, 0.4);
+      }
+
+      .legend {
+        font-size: 12px;
+        opacity: 0.7;
+      }
+
+      @media (max-width: 900px) {
+        .shell {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="shell">
+      <canvas id="game" width="960" height="540"></canvas>
+      <section class="hud">
+        <div class="title">MiniCraft</div>
+        <div class="stat" id="status">Loading world...</div>
+        <div>
+          <div class="stat">Inventory</div>
+          <div class="toolbar" id="toolbar"></div>
+        </div>
+        <div class="legend">
+          <div>Move: WASD / Arrow Keys</div>
+          <div>Jump: Space (hold near edges)</div>
+          <div>Break: Left click</div>
+          <div>Place: Right click</div>
+          <div>Pick slot: 1-4</div>
+        </div>
+      </section>
+    </main>
+
+    <script>
+      const canvas = document.getElementById("game");
+      const ctx = canvas.getContext("2d");
+      const statusEl = document.getElementById("status");
+      const toolbarEl = document.getElementById("toolbar");
+
+      const tileSize = 32;
+      const world = {
+        width: 80,
+        height: 30,
+        tiles: [],
+      };
+
+      const blocks = [
+        { id: 1, name: "Grass", color: "#4caf50" },
+        { id: 2, name: "Dirt", color: "#8d6e63" },
+        { id: 3, name: "Stone", color: "#9e9e9e" },
+        { id: 4, name: "Wood", color: "#c49a6c" },
+      ];
+
+      let activeBlock = 0;
+
+      const player = {
+        x: 10,
+        y: 10,
+        vx: 0,
+        vy: 0,
+        w: 0.8,
+        h: 0.9,
+        onGround: false,
+      };
+
+      const keys = new Set();
+      const gravity = 0.02;
+      const speed = 0.08;
+      const jump = -0.36;
+
+      function initWorld() {
+        world.tiles = Array.from({ length: world.height }, (_, y) =>
+          Array.from({ length: world.width }, (_, x) => {
+            const ground = Math.floor(world.height * 0.55 + Math.sin(x * 0.2) * 2);
+            if (y > ground) return 0;
+            if (y === ground) return 1;
+            if (y > ground - 3) return 2;
+            return 3;
+          })
+        );
+
+        for (let x = 12; x < 20; x += 3) {
+          for (let y = 0; y < 4; y += 1) {
+            const trunkY = Math.floor(world.height * 0.55) - 1 - y;
+            world.tiles[trunkY][x] = 4;
+          }
+        }
+      }
+
+      function drawWorld() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = "#78b9f7";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        const camera = {
+          x: player.x * tileSize - canvas.width / 2,
+          y: player.y * tileSize - canvas.height / 2,
+        };
+
+        const startX = Math.floor(camera.x / tileSize);
+        const startY = Math.floor(camera.y / tileSize);
+        const endX = startX + Math.ceil(canvas.width / tileSize) + 2;
+        const endY = startY + Math.ceil(canvas.height / tileSize) + 2;
+
+        for (let y = startY; y < endY; y += 1) {
+          if (y < 0 || y >= world.height) continue;
+          for (let x = startX; x < endX; x += 1) {
+            if (x < 0 || x >= world.width) continue;
+            const blockId = world.tiles[y][x];
+            if (!blockId) continue;
+            const block = blocks.find((item) => item.id === blockId);
+            const screenX = x * tileSize - camera.x;
+            const screenY = y * tileSize - camera.y;
+            ctx.fillStyle = block.color;
+            ctx.fillRect(screenX, screenY, tileSize, tileSize);
+            ctx.strokeStyle = "rgba(0,0,0,0.2)";
+            ctx.strokeRect(screenX, screenY, tileSize, tileSize);
+          }
+        }
+
+        const px = player.x * tileSize - camera.x;
+        const py = player.y * tileSize - camera.y;
+        ctx.fillStyle = "#ffeb3b";
+        ctx.fillRect(px, py, player.w * tileSize, player.h * tileSize);
+        ctx.strokeStyle = "#b08500";
+        ctx.strokeRect(px, py, player.w * tileSize, player.h * tileSize);
+      }
+
+      function updatePlayer() {
+        player.vx = 0;
+        if (keys.has("a") || keys.has("ArrowLeft")) player.vx = -speed;
+        if (keys.has("d") || keys.has("ArrowRight")) player.vx = speed;
+        if ((keys.has("w") || keys.has("ArrowUp")) && player.onGround) {
+          player.vy = jump;
+          player.onGround = false;
+        }
+
+        player.vy += gravity;
+        movePlayer(player.vx, 0);
+        movePlayer(0, player.vy);
+      }
+
+      function isSolid(tileX, tileY) {
+        if (tileX < 0 || tileX >= world.width || tileY < 0 || tileY >= world.height) return true;
+        return world.tiles[tileY][tileX] !== 0;
+      }
+
+      function movePlayer(dx, dy) {
+        const nextX = player.x + dx;
+        const nextY = player.y + dy;
+
+        if (dx !== 0) {
+          const left = Math.floor(nextX);
+          const right = Math.floor(nextX + player.w);
+          const top = Math.floor(player.y);
+          const bottom = Math.floor(player.y + player.h);
+          if (isSolid(left, top) || isSolid(left, bottom) || isSolid(right, top) || isSolid(right, bottom)) {
+            player.vx = 0;
+          } else {
+            player.x = nextX;
+          }
+        }
+
+        if (dy !== 0) {
+          const left = Math.floor(player.x);
+          const right = Math.floor(player.x + player.w);
+          const top = Math.floor(nextY);
+          const bottom = Math.floor(nextY + player.h);
+          if (isSolid(left, top) || isSolid(right, top) || isSolid(left, bottom) || isSolid(right, bottom)) {
+            if (dy > 0) player.onGround = true;
+            player.vy = 0;
+          } else {
+            player.y = nextY;
+            player.onGround = false;
+          }
+        }
+      }
+
+      function handleMouse(event, placeBlock) {
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = canvas.width / rect.width;
+        const scaleY = canvas.height / rect.height;
+        const mouseX = (event.clientX - rect.left) * scaleX;
+        const mouseY = (event.clientY - rect.top) * scaleY;
+
+        const camera = {
+          x: player.x * tileSize - canvas.width / 2,
+          y: player.y * tileSize - canvas.height / 2,
+        };
+
+        const worldX = Math.floor((mouseX + camera.x) / tileSize);
+        const worldY = Math.floor((mouseY + camera.y) / tileSize);
+
+        if (worldX < 0 || worldX >= world.width || worldY < 0 || worldY >= world.height) return;
+
+        if (placeBlock) {
+          const blockId = blocks[activeBlock].id;
+          if (world.tiles[worldY][worldX] === 0) {
+            world.tiles[worldY][worldX] = blockId;
+          }
+        } else {
+          world.tiles[worldY][worldX] = 0;
+        }
+      }
+
+      function updateToolbar() {
+        toolbarEl.innerHTML = "";
+        blocks.forEach((block, index) => {
+          const slot = document.createElement("div");
+          slot.className = "slot" + (index === activeBlock ? " active" : "");
+          slot.textContent = `${index + 1}. ${block.name}`;
+          toolbarEl.appendChild(slot);
+        });
+      }
+
+      function updateStatus() {
+        statusEl.textContent = `Position: ${player.x.toFixed(1)}, ${player.y.toFixed(1)} | Block: ${
+          blocks[activeBlock].name
+        }`;
+      }
+
+      function loop() {
+        updatePlayer();
+        drawWorld();
+        updateStatus();
+        requestAnimationFrame(loop);
+      }
+
+      window.addEventListener("keydown", (event) => {
+        keys.add(event.key);
+        if (event.key >= "1" && event.key <= "4") {
+          activeBlock = Number(event.key) - 1;
+          updateToolbar();
+        }
+        if (event.key === " ") {
+          keys.add("w");
+        }
+      });
+
+      window.addEventListener("keyup", (event) => {
+        keys.delete(event.key);
+        if (event.key === " ") {
+          keys.delete("w");
+        }
+      });
+
+      canvas.addEventListener("contextmenu", (event) => event.preventDefault());
+      canvas.addEventListener("mousedown", (event) => {
+        if (event.button === 0) handleMouse(event, false);
+        if (event.button === 2) handleMouse(event, true);
+      });
+
+      initWorld();
+      updateToolbar();
+      loop();
+    </script>
+  </body>
+</html>
